@@ -124,6 +124,10 @@ func (b *cloudflareBackend) pathCredsRead(ctx context.Context, req *logical.Requ
 	if err != nil {
 		return nil, fmt.Errorf("error creating cloudflare token: %w", err)
 	}
+	if token.ID == "" {
+		return nil, fmt.Errorf("cloudflare returned a token with no ID; refusing to issue an unrevocable credential")
+	}
+	b.Logger().Info("minted cloudflare token", "role", roleName, "token_id", token.ID, "token_type", scope.Type)
 
 	resp := b.Secret(cloudflareTokenType).Response(
 		map[string]interface{}{
@@ -166,21 +170,36 @@ func policiesNeedNameResolution(policies []policy) bool {
 // resolvePermissionGroups rewrites each policy's permission groups so they carry
 // a concrete Cloudflare ID, resolving any name-only references against the live
 // permission group list. The Name field is cleared so the request sends IDs.
+//
+// Cloudflare's catalog can contain multiple groups that share a display name
+// (across scopes/products). A name that maps to more than one distinct ID is
+// rejected as ambiguous rather than silently resolved to whichever entry
+// happened to be last, which could grant a broader group than intended.
 func resolvePermissionGroups(policies []policy, all []permissionGroup) error {
-	byName := make(map[string]string, len(all))
+	byName := make(map[string]map[string]struct{}, len(all))
 	for _, pg := range all {
-		byName[strings.ToLower(pg.Name)] = pg.ID
+		key := strings.ToLower(pg.Name)
+		if byName[key] == nil {
+			byName[key] = make(map[string]struct{})
+		}
+		byName[key][pg.ID] = struct{}{}
 	}
 
 	for i := range policies {
 		for j := range policies[i].PermissionGroups {
 			pg := &policies[i].PermissionGroups[j]
 			if pg.ID == "" {
-				id, ok := byName[strings.ToLower(pg.Name)]
-				if !ok {
+				ids := byName[strings.ToLower(pg.Name)]
+				switch len(ids) {
+				case 0:
 					return fmt.Errorf("unknown cloudflare permission group name %q", pg.Name)
+				case 1:
+					for id := range ids {
+						pg.ID = id
+					}
+				default:
+					return fmt.Errorf("cloudflare permission group name %q is ambiguous: %d groups share it; reference it by id instead", pg.Name, len(ids))
 				}
-				pg.ID = id
 			}
 			pg.Name = ""
 		}

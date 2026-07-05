@@ -176,6 +176,50 @@ the effective `max_ttl` is also set as a backstop in case Vault never revokes.
 Because generation is gated on `cloudflare/creds/<role>`, the standard Vault ACL
 system restricts which identities may use which roles.
 
+### Rotating the parent token
+
+The parent credential can be rotated in place so it is owned and rolled by
+Vault rather than being a static long-lived secret:
+
+```text
+$ vault write -f cloudflare/config/rotate-root token_type=account
+Key         Value
+---         -----
+rotated     true
+token_id    <parent-token-id>
+token_type  account
+```
+
+This rolls the configured parent token's **value** via the Cloudflare API and
+stores the new value; the token's ID and permissions are unchanged, and the new
+value is never returned. Use `token_type=user` to rotate the user-context
+parent. Only a top-level token that holds *API Tokens · Write* can roll itself,
+which is exactly what the parent token needs to be — Cloudflare does not allow a
+token minted through the API to hold token-management permissions, so rotation
+preserves the existing token rather than creating a replacement.
+
+## Security model
+
+Read this before pointing the engine at a production account.
+
+- **`role/*` write access equals the parent token's full authority.** A role's
+  `policies` are passed to Cloudflare as-is; the plugin does not cap them to a
+  subset. Anyone who can write a role can mint a token with any privilege the
+  parent token can grant, up to whole-account scope. Restrict write access to
+  `role/*` (and `config`) with Vault ACLs as tightly as you would the parent
+  token itself.
+- **Scope the parent token down.** The parent token's Cloudflare permissions are
+  the real privilege ceiling of the mount. Grant it only the permission groups
+  and resources that roles on this mount should ever hand out (plus
+  *API Tokens · Write* so it can mint, revoke, and rotate). Do not reuse a broad
+  account-admin token.
+- **One mount per trust boundary.** All roles on a mount share one parent
+  credential, so they share its reach. For separate tenants/accounts, use
+  separate mounts, each with a parent token scoped to just that tenant.
+- **Rotate the parent token** after seeding it (see above) and on a schedule, so
+  a leaked or operator-retained bootstrap value does not stay valid
+  indefinitely.
+
 ## Local Development
 
 ### Build the code
