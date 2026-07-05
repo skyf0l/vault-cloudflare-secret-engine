@@ -151,6 +151,21 @@ func (b *cloudflareBackend) pathCredsRead(ctx context.Context, req *logical.Requ
 	resp.Secret.TTL = ttl
 	resp.Secret.MaxTTL = maxTTL
 
+	// Optionally surface a derived R2 S3 keypair. The Access Key ID is the
+	// token ID and the Secret Access Key is the hex SHA-256 of the token value;
+	// both are invalidated when the lease is revoked (the token is deleted).
+	if role.R2S3Credentials {
+		resp.Data["r2_access_key_id"] = token.ID
+		resp.Data["r2_secret_access_key"] = r2SecretAccessKey(token.Value)
+		r2AccountID := scope.AccountID
+		if r2AccountID == "" {
+			r2AccountID = config.AccountID
+		}
+		if r2AccountID != "" {
+			resp.Data["r2_endpoint"] = r2Endpoint(r2AccountID)
+		}
+	}
+
 	return resp, nil
 }
 

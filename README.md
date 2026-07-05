@@ -176,6 +176,34 @@ the effective `max_ttl` is also set as a backstop in case Vault never revokes.
 Because generation is gated on `cloudflare/creds/<role>`, the standard Vault ACL
 system restricts which identities may use which roles.
 
+### R2 S3 credentials
+
+For roles whose policies grant R2 permissions, set `r2_s3_credentials=true` and
+the `creds` response additionally returns an S3-compatible keypair derived from
+the token, ready for R2's S3 API:
+
+```text
+$ vault write cloudflare/role/r2-objects \
+    token_type="account" \
+    r2_s3_credentials=true \
+    policies='[{"permission_groups":[{"name":"Workers R2 Storage Bucket Item Write"}],
+                "resources":{"com.cloudflare.api.account.<account-id>":"*"}}]'
+
+$ vault read cloudflare/creds/r2-objects
+Key                     Value
+---                     -----
+token                   v1.0-...
+token_id                <id>
+r2_access_key_id        <id>                # = token_id
+r2_secret_access_key    <64-hex>            # = SHA-256(token value)
+r2_endpoint             https://<account-id>.r2.cloudflarestorage.com
+...
+```
+
+Point any S3 client (region `auto`) at `r2_endpoint` with that keypair. The
+credentials are the token, so revoking the lease deletes the token and
+invalidates them.
+
 ### Rotating the parent token
 
 The parent credential can be rotated in place so it is owned and rolled by
