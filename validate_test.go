@@ -39,7 +39,7 @@ func TestValidateIPRestrictions(t *testing.T) {
 	for _, bad := range [][]string{
 		{"203.0.113.0/33"}, // impossible mask
 		{"not-an-ip"},
-		{""},              // empty element (trailing comma)
+		{""},               // empty element (trailing comma)
 		{"10.0.0.0/8", ""}, // one good, one empty -> must still reject
 	} {
 		if err := validateIPRestrictions("f", bad); err == nil {
