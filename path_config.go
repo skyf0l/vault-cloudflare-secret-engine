@@ -20,6 +20,11 @@ var errBackendNotConfigured = errors.New("cloudflare backend not configured; wri
 const (
 	defaultTTL = time.Hour
 	defaultMax = 24 * time.Hour
+
+	// expiryBackstopBuffer is added to a token's max_ttl when setting its
+	// Cloudflare-side expires_on, so the token always outlives the Vault lease's
+	// latest possible end despite lease-commit delay and clock skew.
+	expiryBackstopBuffer = 5 * time.Minute
 )
 
 // cloudflareConfig is the persisted backend configuration. It can hold

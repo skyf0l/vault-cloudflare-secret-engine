@@ -9,6 +9,11 @@ import (
 	"github.com/hashicorp/vault/sdk/logical"
 )
 
+// PluginVersion is the running plugin version reported to Vault (shown by
+// `vault plugin list` and used for pinning). It is set by the main package from
+// build-time metadata; empty means unversioned.
+var PluginVersion string
+
 // Factory returns a configured Cloudflare secrets backend. It is the entry
 // point referenced by the plugin's main package.
 func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend, error) {
@@ -66,27 +71,11 @@ func newBackend() *cloudflareBackend {
 			SealWrapStorage: []string{configStoragePath},
 		},
 	}
+	if PluginVersion != "" {
+		b.Backend.RunningVersion = PluginVersion
+	}
 
 	return b
-}
-
-// clientForTokenType loads the config and builds a Cloudflare client using the
-// parent credential for the requested token context (account or user). It fails
-// with a clear error when that context's credentials are not configured.
-func (b *cloudflareBackend) clientForTokenType(ctx context.Context, s logical.Storage, tokenType string) (*cloudflareClient, error) {
-	config, err := getConfig(ctx, s)
-	if err != nil {
-		return nil, err
-	}
-	if config == nil {
-		return nil, errBackendNotConfigured
-	}
-
-	token, err := config.parentTokenFor(tokenType)
-	if err != nil {
-		return nil, err
-	}
-	return b.newClient(token), nil
 }
 
 const backendHelp = `

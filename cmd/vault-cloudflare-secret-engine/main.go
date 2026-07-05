@@ -33,6 +33,9 @@ func main() {
 		logFatal(err)
 	}
 
+	// Report the build version to Vault (vault plugin list / pinning).
+	cloudflaresecrets.PluginVersion = "v" + version
+
 	tlsConfig := apiClientMeta.GetTLSConfig()
 	tlsProviderFunc := api.VaultPluginTLSProvider(tlsConfig)
 
