@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/hashicorp/vault/sdk/framework"
@@ -280,6 +279,7 @@ func (b *cloudflareBackend) pathConfigRotateRoot(ctx context.Context, req *logic
 	if err := req.Storage.Put(ctx, entry); err != nil {
 		return nil, err
 	}
+	b.Logger().Info("rotated parent cloudflare token", "token_type", tokenType, "token_id", tokenID)
 
 	return &logical.Response{
 		Data: map[string]interface{}{
@@ -314,10 +314,15 @@ func getConfig(ctx context.Context, s logical.Storage) (*cloudflareConfig, error
 	return config, nil
 }
 
-// maskToken returns the token with all but the last four characters hidden.
+// redactedToken is the fixed placeholder returned for a configured token. It
+// reveals neither the token's length nor any of its characters.
+const redactedToken = "***redacted***"
+
+// maskToken reports whether a token is configured without disclosing any of its
+// bytes or its length: empty stays empty, anything else becomes a fixed marker.
 func maskToken(token string) string {
-	if len(token) <= 4 {
-		return strings.Repeat("x", len(token))
+	if token == "" {
+		return ""
 	}
-	return strings.Repeat("x", len(token)-4) + token[len(token)-4:]
+	return redactedToken
 }

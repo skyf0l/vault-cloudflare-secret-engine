@@ -55,6 +55,7 @@ func (b *cloudflareBackend) secretTokenRevoke(ctx context.Context, req *logical.
 	if err := client.deleteToken(ctx, scope, tokenID); err != nil {
 		return nil, fmt.Errorf("error revoking cloudflare token %s: %w", tokenID, err)
 	}
+	b.Logger().Info("revoked cloudflare token", "token_id", tokenID, "token_type", scope.Type)
 	return nil, nil
 }
 

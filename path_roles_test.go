@@ -153,10 +153,15 @@ func TestTokenScopeBasePath(t *testing.T) {
 }
 
 func TestMaskToken(t *testing.T) {
-	if got := maskToken("abcdef1234"); got != "xxxxxx1234" {
-		t.Fatalf("expected xxxxxx1234, got %s", got)
+	// A configured token becomes a fixed marker that leaks neither its content
+	// nor its length; an unset token stays empty.
+	if got := maskToken("abcdef1234"); got != redactedToken {
+		t.Fatalf("expected %q, got %q", redactedToken, got)
 	}
-	if got := maskToken("abc"); got != "xxx" {
-		t.Fatalf("expected xxx, got %s", got)
+	if got := maskToken("a-different-length-secret"); got != redactedToken {
+		t.Fatalf("mask must not depend on length: got %q", got)
+	}
+	if got := maskToken(""); got != "" {
+		t.Fatalf("expected empty for unset token, got %q", got)
 	}
 }

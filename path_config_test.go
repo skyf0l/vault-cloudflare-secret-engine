@@ -108,8 +108,9 @@ func TestConfigReadMasksBothTokens(t *testing.T) {
 		if strings.Contains(v, "secret-") {
 			t.Fatalf("%s leaked unmasked: %q", field, v)
 		}
-		if !strings.HasPrefix(v, "x") {
-			t.Fatalf("%s not masked: %q", field, v)
+		// The mask must reveal neither content nor length: a fixed marker.
+		if v != redactedToken {
+			t.Fatalf("%s not fully masked: %q", field, v)
 		}
 	}
 }
