@@ -126,6 +126,9 @@ func (b *cloudflareBackend) pathRolesRead(ctx context.Context, req *logical.Requ
 }
 
 func (b *cloudflareBackend) pathRolesWrite(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
 	name, ok := d.GetOk("name")
 	if !ok {
 		return logical.ErrorResponse("missing role name"), nil
@@ -207,6 +210,9 @@ func (b *cloudflareBackend) pathRolesWrite(ctx context.Context, req *logical.Req
 }
 
 func (b *cloudflareBackend) pathRolesDelete(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
 	if err := req.Storage.Delete(ctx, "role/"+d.Get("name").(string)); err != nil {
 		return nil, fmt.Errorf("error deleting cloudflare role: %w", err)
 	}

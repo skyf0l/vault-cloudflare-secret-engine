@@ -3,6 +3,7 @@ package cloudflaresecrets
 import (
 	"context"
 	"strings"
+	"sync"
 
 	"github.com/hashicorp/vault/sdk/framework"
 	"github.com/hashicorp/vault/sdk/logical"
@@ -22,6 +23,26 @@ func Factory(ctx context.Context, conf *logical.BackendConfig) (logical.Backend,
 // API tokens.
 type cloudflareBackend struct {
 	*framework.Backend
+	// lock serializes read-modify-write mutations of the config and role
+	// entries. Vault core does not serialize concurrent logical requests to the
+	// same storage key across a Get+Put, so without this two concurrent writes
+	// could lose an update (e.g. a rotated parent token clobbered back).
+	lock sync.RWMutex
+	// apiBaseURL, when non-empty, overrides the Cloudflare API base URL for
+	// every client this backend builds. It is a test-only seam: it is not
+	// settable through any configured path, so it cannot be influenced by an
+	// operator or attacker.
+	apiBaseURL string
+}
+
+// newClient builds a Cloudflare client for a parent token, applying the
+// backend's API base override when set (tests only).
+func (b *cloudflareBackend) newClient(token string) *cloudflareClient {
+	c := newCloudflareClient(token)
+	if b.apiBaseURL != "" {
+		c.baseURL = b.apiBaseURL
+	}
+	return c
 }
 
 func newBackend() *cloudflareBackend {
@@ -34,6 +55,7 @@ func newBackend() *cloudflareBackend {
 			pathRole(b),
 			[]*framework.Path{
 				pathConfig(b),
+				pathConfigRotateRoot(b),
 				pathCreds(b),
 			},
 		),
@@ -64,7 +86,7 @@ func (b *cloudflareBackend) clientForTokenType(ctx context.Context, s logical.St
 	if err != nil {
 		return nil, err
 	}
-	return newCloudflareClient(token), nil
+	return b.newClient(token), nil
 }
 
 const backendHelp = `

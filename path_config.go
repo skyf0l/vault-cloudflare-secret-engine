@@ -130,6 +130,9 @@ func (b *cloudflareBackend) pathConfigRead(ctx context.Context, req *logical.Req
 }
 
 func (b *cloudflareBackend) pathConfigWrite(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
 	config, err := getConfig(ctx, req.Storage)
 	if err != nil {
 		return nil, err
@@ -195,7 +198,96 @@ func (b *cloudflareBackend) pathConfigWrite(ctx context.Context, req *logical.Re
 }
 
 func (b *cloudflareBackend) pathConfigDelete(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
 	return nil, req.Storage.Delete(ctx, configStoragePath)
+}
+
+func pathConfigRotateRoot(b *cloudflareBackend) *framework.Path {
+	return &framework.Path{
+		Pattern: "config/rotate-root",
+		Fields: map[string]*framework.FieldSchema{
+			"token_type": {
+				Type:        framework.TypeString,
+				Description: `Which parent credential to rotate: "account" (default) or "user".`,
+				Default:     tokenTypeAccount,
+			},
+		},
+		Operations: map[logical.Operation]framework.OperationHandler{
+			logical.UpdateOperation: &framework.PathOperation{Callback: b.pathConfigRotateRoot},
+		},
+		HelpSynopsis: "Rotate a parent Cloudflare API token in place.",
+		HelpDescription: `Rolls the configured parent token's value via the Cloudflare API and
+stores the new value, so the bootstrap credential is owned and rotatable by
+Vault. The token's ID and permissions are preserved; only the secret changes.
+The plaintext value is never returned.`,
+	}
+}
+
+// pathConfigRotateRoot rolls a configured parent token's value and persists it.
+// It discovers the token's own ID via the verify endpoint, rolls the value, and
+// writes the new value back to config. The old value is invalidated by
+// Cloudflare, so the bootstrap credential becomes Vault-owned.
+func (b *cloudflareBackend) pathConfigRotateRoot(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
+	tokenType := d.Get("token_type").(string)
+	if tokenType != tokenTypeAccount && tokenType != tokenTypeUser {
+		return logical.ErrorResponse("token_type must be %q or %q", tokenTypeAccount, tokenTypeUser), nil
+	}
+
+	config, err := getConfig(ctx, req.Storage)
+	if err != nil {
+		return nil, err
+	}
+	if config == nil {
+		return nil, errBackendNotConfigured
+	}
+
+	token, err := config.parentTokenFor(tokenType)
+	if err != nil {
+		return logical.ErrorResponse(err.Error()), nil
+	}
+
+	scope := tokenScope{Type: tokenType, AccountID: config.AccountID}
+	client := b.newClient(token)
+
+	tokenID, err := client.verifyToken(ctx, scope)
+	if err != nil {
+		return nil, fmt.Errorf("verifying parent token before rotation: %w", err)
+	}
+	newValue, err := client.rollToken(ctx, scope, tokenID)
+	if err != nil {
+		return nil, fmt.Errorf("rolling parent token: %w", err)
+	}
+	if newValue == "" {
+		return nil, fmt.Errorf("cloudflare returned an empty value when rolling the parent token")
+	}
+
+	switch tokenType {
+	case tokenTypeUser:
+		config.UserAPIToken = newValue
+	default:
+		config.APIToken = newValue
+	}
+
+	entry, err := logical.StorageEntryJSON(configStoragePath, config)
+	if err != nil {
+		return nil, err
+	}
+	if err := req.Storage.Put(ctx, entry); err != nil {
+		return nil, err
+	}
+
+	return &logical.Response{
+		Data: map[string]interface{}{
+			"token_type": tokenType,
+			"token_id":   tokenID,
+			"rotated":    true,
+		},
+	}, nil
 }
 
 func getConfig(ctx context.Context, s logical.Storage) (*cloudflareConfig, error) {

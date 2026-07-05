@@ -24,3 +24,19 @@ func newTestBackend(t *testing.T) (logical.Backend, logical.Storage) {
 	}
 	return b, storage
 }
+
+// newTestBackendWithAPI builds a *cloudflareBackend whose Cloudflare clients are
+// pointed at apiBaseURL (an httptest server), so backend flows that call the
+// Cloudflare API can be exercised offline.
+func newTestBackendWithAPI(t *testing.T, apiBaseURL string) (*cloudflareBackend, logical.Storage) {
+	t.Helper()
+	storage := &logical.InmemStorage{}
+	conf := logical.TestBackendConfig()
+	conf.StorageView = storage
+	b := newBackend()
+	b.apiBaseURL = apiBaseURL
+	if err := b.Setup(context.Background(), conf); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	return b, storage
+}
