@@ -15,13 +15,14 @@ import (
 // Cloudflare token context (account vs user) and the full policy set (ACL +
 // resources) that every generated token receives.
 type cloudflareRoleEntry struct {
-	TokenType      string          `json:"token_type"`
-	AccountID      string          `json:"account_id,omitempty"`
-	Policies       json.RawMessage `json:"policies"`
-	RequestIPIn    []string        `json:"request_ip_in,omitempty"`
-	RequestIPNotIn []string        `json:"request_ip_not_in,omitempty"`
-	TTL            time.Duration   `json:"ttl"`
-	MaxTTL         time.Duration   `json:"max_ttl"`
+	TokenType       string          `json:"token_type"`
+	AccountID       string          `json:"account_id,omitempty"`
+	Policies        json.RawMessage `json:"policies"`
+	RequestIPIn     []string        `json:"request_ip_in,omitempty"`
+	RequestIPNotIn  []string        `json:"request_ip_not_in,omitempty"`
+	R2S3Credentials bool            `json:"r2_s3_credentials,omitempty"`
+	TTL             time.Duration   `json:"ttl"`
+	MaxTTL          time.Duration   `json:"max_ttl"`
 }
 
 func (r *cloudflareRoleEntry) toResponseData() map[string]interface{} {
@@ -31,6 +32,7 @@ func (r *cloudflareRoleEntry) toResponseData() map[string]interface{} {
 		"policies":          json.RawMessage(r.Policies),
 		"request_ip_in":     r.RequestIPIn,
 		"request_ip_not_in": r.RequestIPNotIn,
+		"r2_s3_credentials": r.R2S3Credentials,
 		"ttl":               int64(r.TTL.Seconds()),
 		"max_ttl":           int64(r.MaxTTL.Seconds()),
 	}
@@ -67,6 +69,10 @@ func pathRole(b *cloudflareBackend) []*framework.Path {
 				"request_ip_not_in": {
 					Type:        framework.TypeCommaStringSlice,
 					Description: "Optional client-IP deny list (IPv4/IPv6 CIDRs). The token is rejected from these addresses.",
+				},
+				"r2_s3_credentials": {
+					Type:        framework.TypeBool,
+					Description: "If true, creds responses also include a derived R2 S3 keypair (r2_access_key_id, r2_secret_access_key) and r2_endpoint for use against R2's S3-compatible API. The role's policies must grant R2 permissions.",
 				},
 				"ttl": {
 					Type:        framework.TypeDurationSecond,
@@ -187,6 +193,10 @@ func (b *cloudflareBackend) pathRolesWrite(ctx context.Context, req *logical.Req
 	}
 	if err := validateIPRestrictions("request_ip_not_in", role.RequestIPNotIn); err != nil {
 		return logical.ErrorResponse(err.Error()), nil
+	}
+
+	if v, ok := d.GetOk("r2_s3_credentials"); ok {
+		role.R2S3Credentials = v.(bool)
 	}
 
 	if v, ok := d.GetOk("ttl"); ok {
