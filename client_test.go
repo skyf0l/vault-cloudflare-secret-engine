@@ -142,3 +142,39 @@ func TestCfErrorIsNotFound(t *testing.T) {
 		t.Fatal("403 cfError must not be classified as not-found")
 	}
 }
+
+// TestDeleteTokenIdempotentOn404 verifies that deleting an already-gone token
+// returns nil, so Vault can clear the lease instead of retrying forever. [H1]
+func TestDeleteTokenIdempotentOn404(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			t.Errorf("expected DELETE, got %s", r.Method)
+		}
+		writeEnvelope(w, http.StatusNotFound,
+			`{"success":false,"errors":[{"code":1001,"message":"token not found"}],"result":null}`)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv)
+	scope := tokenScope{Type: tokenTypeAccount, AccountID: "acct"}
+	if err := c.deleteToken(context.Background(), scope, "already-gone"); err != nil {
+		t.Fatalf("expected 404 delete to be treated as success, got: %v", err)
+	}
+}
+
+// TestDeleteTokenPropagatesRealErrors verifies that a genuine failure (403) is
+// still surfaced, so revocation problems that are not "already gone" are not
+// silently swallowed.
+func TestDeleteTokenPropagatesRealErrors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeEnvelope(w, http.StatusForbidden,
+			`{"success":false,"errors":[{"code":9109,"message":"unauthorized"}],"result":null}`)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv)
+	scope := tokenScope{Type: tokenTypeAccount, AccountID: "acct"}
+	if err := c.deleteToken(context.Background(), scope, "tok"); err == nil {
+		t.Fatal("expected a 403 to propagate as an error, got nil")
+	}
+}

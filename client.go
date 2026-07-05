@@ -320,10 +320,22 @@ func (c *cloudflareClient) createToken(ctx context.Context, scope tokenScope, re
 }
 
 // deleteToken revokes a previously created token by ID in the given scope.
+//
+// Revocation is idempotent: if the token is already gone (expired via the
+// Cloudflare-side expires_on backstop, deleted out-of-band, or a double
+// revoke), Cloudflare returns 404. That is treated as success so Vault can
+// clear the lease, instead of the revocation failing forever and wedging the
+// lease in Vault's retry queue.
 func (c *cloudflareClient) deleteToken(ctx context.Context, scope tokenScope, tokenID string) error {
 	base, err := scope.basePath()
 	if err != nil {
 		return err
 	}
-	return c.do(ctx, http.MethodDelete, base+"/tokens/"+tokenID, nil, nil)
+	err = c.do(ctx, http.MethodDelete, base+"/tokens/"+tokenID, nil, nil)
+
+	var apiErr *cfError
+	if errors.As(err, &apiErr) && apiErr.isNotFound() {
+		return nil
+	}
+	return err
 }
