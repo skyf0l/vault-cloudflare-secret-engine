@@ -2,7 +2,6 @@ package cloudflaresecrets
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -36,7 +35,11 @@ func secretToken(b *cloudflareBackend) *framework.Secret {
 func (b *cloudflareBackend) secretTokenRevoke(ctx context.Context, req *logical.Request, d *framework.FieldData) (*logical.Response, error) {
 	tokenID, ok := req.Secret.InternalData["token_id"].(string)
 	if !ok || tokenID == "" {
-		return nil, errors.New("secret is missing token_id internal data")
+		// Corrupted or legacy lease with no token ID: there is nothing we can
+		// delete. Clear the lease rather than wedging it; any real token dies at
+		// its Cloudflare-side expires_on backstop.
+		b.Logger().Warn("cloudflare token secret missing token_id; cannot revoke, relying on expiry backstop")
+		return nil, nil
 	}
 
 	scope := tokenScope{}
@@ -47,12 +50,26 @@ func (b *cloudflareBackend) secretTokenRevoke(ctx context.Context, req *logical.
 		scope.AccountID = v
 	}
 
-	client, err := b.clientForTokenType(ctx, req.Storage, scope.Type)
+	// Build the client from current config. If the backend was deconfigured or
+	// the parent credential for this context was removed while leases were
+	// outstanding, we cannot call Cloudflare — clear the lease and let the
+	// expires_on backstop reclaim the token, instead of failing revocation
+	// forever and wedging the lease.
+	config, err := getConfig(ctx, req.Storage)
 	if err != nil {
 		return nil, err
 	}
+	if config == nil {
+		b.Logger().Warn("cloudflare backend not configured at revoke; relying on token expiry backstop", "token_id", tokenID)
+		return nil, nil
+	}
+	token, err := config.parentTokenFor(scope.Type)
+	if err != nil {
+		b.Logger().Warn("parent credential no longer configured; cannot revoke, relying on token expiry backstop", "token_id", tokenID, "token_type", scope.Type)
+		return nil, nil
+	}
 
-	if err := client.deleteToken(ctx, scope, tokenID); err != nil {
+	if err := b.newClient(token).deleteToken(ctx, scope, tokenID); err != nil {
 		return nil, fmt.Errorf("error revoking cloudflare token %s: %w", tokenID, err)
 	}
 	b.Logger().Info("revoked cloudflare token", "token_id", tokenID, "token_type", scope.Type)

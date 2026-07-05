@@ -162,6 +162,20 @@ func TestDeleteTokenIdempotentOn404(t *testing.T) {
 	}
 }
 
+// TestDoRejectsSuccessOnNon2xx verifies a non-2xx response claiming success is
+// treated as an error rather than trusted. [L2]
+func TestDoRejectsSuccessOnNon2xx(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeEnvelope(w, http.StatusNotFound, `{"success":true,"result":{}}`)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv)
+	if err := c.do(context.Background(), http.MethodGet, "/x", nil, nil); err == nil {
+		t.Fatal("expected error for success=true on a 404")
+	}
+}
+
 // TestDeleteTokenPropagatesRealErrors verifies that a genuine failure (403) is
 // still surfaced, so revocation problems that are not "already gone" are not
 // silently swallowed.

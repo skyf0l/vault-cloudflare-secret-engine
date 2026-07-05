@@ -288,6 +288,13 @@ func (c *cloudflareClient) doOnce(ctx context.Context, method, url string, bodyB
 		return resp.StatusCode, retryAfterHeader(resp), apiErr
 	}
 
+	// Guard against a non-2xx response that nonetheless claims success (e.g. a
+	// misbehaving proxy/cache): the HTTP layer's own signal must agree.
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return resp.StatusCode, retryAfterHeader(resp),
+			&cfError{StatusCode: resp.StatusCode, Message: "success=true on a non-2xx response"}
+	}
+
 	if out != nil && len(cfResp.Result) > 0 {
 		if err := json.Unmarshal(cfResp.Result, out); err != nil {
 			return resp.StatusCode, 0, err

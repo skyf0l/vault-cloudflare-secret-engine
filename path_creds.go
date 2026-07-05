@@ -102,11 +102,16 @@ func (b *cloudflareBackend) pathCredsRead(ctx context.Context, req *logical.Requ
 		return logical.ErrorResponse(err.Error()), nil
 	}
 
-	// Cloudflare-side expiry backstop in case Vault never revokes.
+	// Cloudflare-side expiry backstop in case Vault never revokes. A buffer is
+	// added on top of max_ttl so the Cloudflare token always outlives the Vault
+	// lease's latest possible end (the lease is committed slightly after this
+	// call, and clocks may skew); otherwise a lease renewed to its cap could
+	// briefly wrap an already-expired token.
 	backstop := maxTTL
 	if backstop <= 0 {
 		backstop = defaultMax
 	}
+	backstop += expiryBackstopBuffer
 
 	tokenReq := &createTokenRequest{
 		Name:      fmt.Sprintf("vault-%s-%d", roleName, time.Now().Unix()),
