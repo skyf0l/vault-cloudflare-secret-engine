@@ -8,11 +8,28 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 )
 
 // cloudflareAPIBase is the root of the Cloudflare v4 REST API.
 const cloudflareAPIBase = "https://api.cloudflare.com/client/v4"
+
+const (
+	// maxResponseBytes bounds how much of a Cloudflare response body is read
+	// into memory, protecting the Vault process from a malicious or
+	// malfunctioning endpoint returning an unbounded body. Token responses are
+	// a few KB at most.
+	maxResponseBytes = 2 << 20 // 2 MiB
+
+	// maxRetries is the number of additional attempts made after the first for
+	// transiently-failing requests (429 / 5xx / transport errors).
+	maxRetries = 3
+
+	// defaultRetryBackoff is the initial wait before the first retry; it
+	// doubles each subsequent attempt unless the server sends Retry-After.
+	defaultRetryBackoff = 250 * time.Millisecond
+)
 
 // Token contexts. Cloudflare mints either account-owned tokens (tied to a
 // service, created under /accounts/{id}/tokens) or user-owned tokens (tied to
@@ -48,14 +65,68 @@ func (s tokenScope) basePath() (string, error) {
 // with a parent API token allowed to mint and delete other tokens.
 type cloudflareClient struct {
 	apiToken   string
+	baseURL    string
 	httpClient *http.Client
+	// retryBackoff is the initial backoff before the first retry. Zero means
+	// defaultRetryBackoff; tests set it small to stay fast.
+	retryBackoff time.Duration
 }
 
 func newCloudflareClient(apiToken string) *cloudflareClient {
 	return &cloudflareClient{
-		apiToken:   apiToken,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		apiToken:     apiToken,
+		baseURL:      cloudflareAPIBase,
+		httpClient:   &http.Client{Timeout: 30 * time.Second},
+		retryBackoff: defaultRetryBackoff,
 	}
+}
+
+// cfError is a Cloudflare API error carrying the HTTP status and the first
+// Cloudflare error code/message, so callers can react to specific conditions
+// (for example, treating a 404 on delete as already-gone).
+type cfError struct {
+	StatusCode int
+	Code       int
+	Message    string
+}
+
+func (e *cfError) Error() string {
+	if e.Code != 0 || e.Message != "" {
+		return fmt.Sprintf("cloudflare API error (status %d): code %d: %s", e.StatusCode, e.Code, e.Message)
+	}
+	return fmt.Sprintf("cloudflare API request failed with status %d", e.StatusCode)
+}
+
+// isNotFound reports whether the error signals that the target resource no
+// longer exists (HTTP 404), so an operation such as delete can be treated as
+// already complete.
+func (e *cfError) isNotFound() bool {
+	return e.StatusCode == http.StatusNotFound
+}
+
+// idempotent reports whether a request method is safe to retry after a
+// transient failure without risking a duplicate side effect. POST is excluded
+// because a lost response could hide a token that was actually created.
+func idempotent(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodDelete, http.MethodPut, http.MethodHead:
+		return true
+	default:
+		return false
+	}
+}
+
+// retryAfterHeader parses a Retry-After header expressed as a number of
+// seconds. It ignores the HTTP-date form and any unparseable value.
+func retryAfterHeader(resp *http.Response) time.Duration {
+	v := resp.Header.Get("Retry-After")
+	if v == "" {
+		return 0
+	}
+	if secs, err := strconv.Atoi(v); err == nil && secs >= 0 {
+		return time.Duration(secs) * time.Second
+	}
+	return 0
 }
 
 // cfAPIError mirrors a single entry of the Cloudflare "errors" array.
@@ -115,54 +186,111 @@ type tokenResult struct {
 	Value string `json:"value"`
 }
 
-// do performs an authenticated request and unwraps the response envelope.
+// do performs an authenticated request and unwraps the response envelope,
+// retrying transient failures (429 / 5xx / transport errors) with backoff.
+// Non-idempotent methods (POST) are not retried on ambiguous failures so a
+// lost response cannot cause a duplicate token to be minted.
 func (c *cloudflareClient) do(ctx context.Context, method, path string, body, out interface{}) error {
-	var reqBody io.Reader
+	var bodyBytes []byte
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
 			return err
 		}
-		reqBody = bytes.NewReader(b)
+		bodyBytes = b
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, cloudflareAPIBase+path, reqBody)
+	base := c.baseURL
+	if base == "" {
+		base = cloudflareAPIBase
+	}
+	url := base + path
+
+	backoff := c.retryBackoff
+	if backoff <= 0 {
+		backoff = defaultRetryBackoff
+	}
+
+	var lastErr error
+	for attempt := 0; ; attempt++ {
+		status, retryAfter, err := c.doOnce(ctx, method, url, bodyBytes, out)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+
+		// status == 0 indicates a transport error (no HTTP response).
+		transient := status == 0 || status == http.StatusTooManyRequests || status >= 500
+		allowRetry := status == http.StatusTooManyRequests || idempotent(method)
+		if !transient || !allowRetry || attempt >= maxRetries {
+			return lastErr
+		}
+
+		wait := backoff
+		if retryAfter > 0 {
+			wait = retryAfter
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(wait):
+		}
+		backoff *= 2
+	}
+}
+
+// doOnce performs a single HTTP attempt. It returns the HTTP status code (0 on
+// a transport error), the server's Retry-After hint if any, and the error (nil
+// on success). On success it unmarshals the result into out.
+func (c *cloudflareClient) doOnce(ctx context.Context, method, url string, bodyBytes []byte, out interface{}) (int, time.Duration, error) {
+	var reqBody io.Reader
+	if bodyBytes != nil {
+		reqBody = bytes.NewReader(bodyBytes)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
 	if err != nil {
-		return err
+		return 0, 0, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiToken)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return err
+		return 0, 0, err
 	}
 	defer resp.Body.Close()
 
-	data, err := io.ReadAll(resp.Body)
+	// Bound the read: token responses are tiny, and an unbounded body from a
+	// misbehaving endpoint must not exhaust Vault's memory.
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
-		return err
+		return resp.StatusCode, retryAfterHeader(resp), err
 	}
 
 	var cfResp cfResponse
 	if err := json.Unmarshal(data, &cfResp); err != nil {
-		return fmt.Errorf("cloudflare: failed to parse response (status %d): %s", resp.StatusCode, string(data))
+		// The body is not the expected envelope. Do NOT echo it: token-endpoint
+		// responses can contain a freshly minted secret token value.
+		return resp.StatusCode, retryAfterHeader(resp),
+			fmt.Errorf("cloudflare: failed to parse response (status %d)", resp.StatusCode)
 	}
 
 	if !cfResp.Success {
+		apiErr := &cfError{StatusCode: resp.StatusCode}
 		if len(cfResp.Errors) > 0 {
-			return fmt.Errorf("cloudflare API error (status %d): code %d: %s",
-				resp.StatusCode, cfResp.Errors[0].Code, cfResp.Errors[0].Message)
+			apiErr.Code = cfResp.Errors[0].Code
+			apiErr.Message = cfResp.Errors[0].Message
 		}
-		return fmt.Errorf("cloudflare API request failed with status %d", resp.StatusCode)
+		return resp.StatusCode, retryAfterHeader(resp), apiErr
 	}
 
 	if out != nil && len(cfResp.Result) > 0 {
 		if err := json.Unmarshal(cfResp.Result, out); err != nil {
-			return err
+			return resp.StatusCode, 0, err
 		}
 	}
-	return nil
+	return resp.StatusCode, 0, nil
 }
 
 // listPermissionGroups returns the permission groups available in a scope.
