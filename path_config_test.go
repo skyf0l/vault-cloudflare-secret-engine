@@ -38,10 +38,11 @@ func TestConfigWriteValidation(t *testing.T) {
 		data    map[string]interface{}
 		wantErr bool
 	}{
-		{"account only", map[string]interface{}{"cloudflare_account_id": "a", "cloudflare_api_token": "t"}, false},
+		{"account only", map[string]interface{}{"cloudflare_account_id": testAccountID, "cloudflare_api_token": "t"}, false},
 		{"user only", map[string]interface{}{"cloudflare_user_api_token": "u"}, false},
-		{"both", map[string]interface{}{"cloudflare_account_id": "a", "cloudflare_api_token": "t", "cloudflare_user_api_token": "u"}, false},
-		{"account_id without token", map[string]interface{}{"cloudflare_account_id": "a"}, true},
+		{"both", map[string]interface{}{"cloudflare_account_id": testAccountID, "cloudflare_api_token": "t", "cloudflare_user_api_token": "u"}, false},
+		{"account_id without token", map[string]interface{}{"cloudflare_account_id": testAccountID}, true},
+		{"malformed account_id", map[string]interface{}{"cloudflare_account_id": "not-hex", "cloudflare_api_token": "t"}, true},
 		{"token without account_id", map[string]interface{}{"cloudflare_api_token": "t"}, true},
 		{"nothing", map[string]interface{}{}, true},
 	}
@@ -86,7 +87,7 @@ func TestConfigReadMasksBothTokens(t *testing.T) {
 		Path:      "config",
 		Storage:   storage,
 		Data: map[string]interface{}{
-			"cloudflare_account_id":     "acct",
+			"cloudflare_account_id":     testAccountID,
 			"cloudflare_api_token":      "secret-account-token",
 			"cloudflare_user_api_token": "secret-user-token",
 		},

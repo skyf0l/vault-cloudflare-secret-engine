@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 )
@@ -55,7 +56,9 @@ func (s tokenScope) basePath() (string, error) {
 		if s.AccountID == "" {
 			return "", errors.New("account_id is required for account-owned tokens")
 		}
-		return "/accounts/" + s.AccountID, nil
+		// Escape as defense-in-depth even though account_id is validated on
+		// write, so a stored value can never manipulate the request path.
+		return "/accounts/" + url.PathEscape(s.AccountID), nil
 	default:
 		return "", fmt.Errorf("invalid token_type %q (must be %q or %q)", s.Type, tokenTypeAccount, tokenTypeUser)
 	}
@@ -331,7 +334,7 @@ func (c *cloudflareClient) deleteToken(ctx context.Context, scope tokenScope, to
 	if err != nil {
 		return err
 	}
-	err = c.do(ctx, http.MethodDelete, base+"/tokens/"+tokenID, nil, nil)
+	err = c.do(ctx, http.MethodDelete, base+"/tokens/"+url.PathEscape(tokenID), nil, nil)
 
 	var apiErr *cfError
 	if errors.As(err, &apiErr) && apiErr.isNotFound() {
