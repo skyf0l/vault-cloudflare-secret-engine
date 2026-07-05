@@ -322,6 +322,39 @@ func (c *cloudflareClient) createToken(ctx context.Context, scope tokenScope, re
 	return &res, nil
 }
 
+// verifyToken returns the ID of the token used to authenticate this client, by
+// calling the scope's tokens/verify endpoint. It is used by root rotation to
+// discover the parent token's own ID before rolling it.
+func (c *cloudflareClient) verifyToken(ctx context.Context, scope tokenScope) (string, error) {
+	base, err := scope.basePath()
+	if err != nil {
+		return "", err
+	}
+	var res struct {
+		ID     string `json:"id"`
+		Status string `json:"status"`
+	}
+	if err := c.do(ctx, http.MethodGet, base+"/tokens/verify", nil, &res); err != nil {
+		return "", err
+	}
+	return res.ID, nil
+}
+
+// rollToken regenerates the value of tokenID and returns the new value. The
+// token's ID and permissions are preserved; only the secret changes. The old
+// value is invalidated by Cloudflare once this returns.
+func (c *cloudflareClient) rollToken(ctx context.Context, scope tokenScope, tokenID string) (string, error) {
+	base, err := scope.basePath()
+	if err != nil {
+		return "", err
+	}
+	var newValue string
+	if err := c.do(ctx, http.MethodPut, base+"/tokens/"+url.PathEscape(tokenID)+"/value", struct{}{}, &newValue); err != nil {
+		return "", err
+	}
+	return newValue, nil
+}
+
 // deleteToken revokes a previously created token by ID in the given scope.
 //
 // Revocation is idempotent: if the token is already gone (expired via the
