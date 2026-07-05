@@ -152,6 +152,11 @@ func (b *cloudflareBackend) pathRolesWrite(ctx context.Context, req *logical.Req
 	if v, ok := d.GetOk("account_id"); ok {
 		role.AccountID = v.(string)
 	}
+	if role.AccountID != "" {
+		if err := validateAccountID(role.AccountID); err != nil {
+			return logical.ErrorResponse(err.Error()), nil
+		}
+	}
 
 	if v, ok := d.GetOk("policies"); ok {
 		policies, err := parsePolicies(v.(string))
@@ -173,6 +178,12 @@ func (b *cloudflareBackend) pathRolesWrite(ctx context.Context, req *logical.Req
 	}
 	if v, ok := d.GetOk("request_ip_not_in"); ok {
 		role.RequestIPNotIn = v.([]string)
+	}
+	if err := validateIPRestrictions("request_ip_in", role.RequestIPIn); err != nil {
+		return logical.ErrorResponse(err.Error()), nil
+	}
+	if err := validateIPRestrictions("request_ip_not_in", role.RequestIPNotIn); err != nil {
+		return logical.ErrorResponse(err.Error()), nil
 	}
 
 	if v, ok := d.GetOk("ttl"); ok {
@@ -255,8 +266,8 @@ func parsePolicies(raw string) ([]policy, error) {
 				return nil, fmt.Errorf("policy %d: permission_group %d needs an \"id\" or \"name\"", i, j)
 			}
 		}
-		if len(p.Resources) == 0 {
-			return nil, fmt.Errorf("policy %d: resources is required", i)
+		if err := validateResources(p.Resources); err != nil {
+			return nil, fmt.Errorf("policy %d: %w", i, err)
 		}
 	}
 	return policies, nil

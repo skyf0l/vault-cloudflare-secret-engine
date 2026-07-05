@@ -171,6 +171,11 @@ func (b *cloudflareBackend) pathConfigWrite(ctx context.Context, req *logical.Re
 	if (config.AccountID == "") != (config.APIToken == "") {
 		return logical.ErrorResponse("account credentials require both cloudflare_account_id and cloudflare_api_token"), nil
 	}
+	if config.AccountID != "" {
+		if err := validateAccountID(config.AccountID); err != nil {
+			return logical.ErrorResponse(err.Error()), nil
+		}
+	}
 	// At least one usable context (account and/or user) must be configured.
 	hasAccount := config.AccountID != "" && config.APIToken != ""
 	hasUser := config.UserAPIToken != ""
