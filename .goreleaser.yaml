@@ -64,9 +64,8 @@ changelog:
       - Merge branch
 
 release:
-  github:
-    owner: kalw
-    name: vault-cloudflare-secret-engine
+  # owner/name are auto-detected from the `origin` remote, so this releases to
+  # whatever repo the workflow runs in (fork-friendly).
   prerelease: auto
   draft: false
   header: |
@@ -75,4 +74,4 @@ release:
     Download the asset matching your Vault server's OS/arch, verify it against
     `checksums.txt`, then register the SHA-256 with Vault's plugin catalog.
 
-    📦 **[Install instructions](https://github.com/kalw/vault-cloudflare-secret-engine#install-pre-built-binary)**
+    📦 **[Install instructions](https://github.com/skyf0l/vault-cloudflare-secret-engine#install-pre-built-binary)**
